@@ -33,6 +33,7 @@ namespace CryoTray.Tests
             allPassed &= TestProtectedStorageAcl();
             allPassed &= TestUntrustedRollbackRootIsRejected();
             allPassed &= TestApplicationDirectoryProtection();
+            allPassed &= TestProtectedAncestorLocation();
             allPassed &= TestInstallationClassification();
 
             Console.WriteLine("==================================================");
@@ -758,6 +759,82 @@ namespace CryoTray.Tests
             {
                 try { if (Directory.Exists(testDirectory)) { Directory.Delete(testDirectory, true); } } catch { }
                 try { if (Directory.Exists(portableDirectory)) { Directory.Delete(portableDirectory, true); } } catch { }
+            }
+        }
+
+        private static bool TestProtectedAncestorLocation()
+        {
+            Console.Write("[TEST] Protected ancestor does not reject a safe install... ");
+            string root = Path.Combine(
+                Path.GetTempPath(), "cryotray-ancestor-" + Guid.NewGuid().ToString("N"));
+            string parent = Path.Combine(root, "Program Files");
+            string app = Path.Combine(parent, "CryoTray");
+
+            try
+            {
+                var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+                var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+
+                Directory.CreateDirectory(root);
+                var rootSecurity = new DirectoryInfo(root).GetAccessControl(
+                    AccessControlSections.Access | AccessControlSections.Owner);
+                rootSecurity.SetAccessRule(new FileSystemAccessRule(
+                    users, FileSystemRights.FullControl, inherit,
+                    PropagationFlags.None, AccessControlType.Allow));
+                new DirectoryInfo(root).SetAccessControl(rootSecurity);
+
+                Directory.CreateDirectory(parent);
+                UpdateStorage.EnsureApplicationDirectoryProtected(parent);
+                Directory.CreateDirectory(app);
+                UpdateStorage.EnsureApplicationDirectoryProtected(app);
+                File.WriteAllText(Path.Combine(app, "CryoTray.exe"), "test");
+
+                // The root is deliberately user-writable with an untrusted owner. A protected
+                // DACL on the parent blocks those rights, so the application folder is safe.
+                if (!UpdateStorage.IsSafeApplicationLocation(app, out string safeFailure))
+                {
+                    throw new InvalidOperationException(
+                        "A protected ancestor incorrectly rejected the install: " + safeFailure);
+                }
+                Assert(!UpdateStorage.IsSafeApplicationLocation(
+                    Path.Combine(root, "Missing"), out string missingFailure));
+                Assert(missingFailure.Contains("not found"));
+
+                // A dangerous ACE on the immediate parent cannot be inherited away and must
+                // still be rejected.
+                var parentSecurity = new DirectoryInfo(parent).GetAccessControl(
+                    AccessControlSections.Access);
+                parentSecurity.AddAccessRule(new FileSystemAccessRule(
+                    users, FileSystemRights.FullControl, inherit,
+                    PropagationFlags.None, AccessControlType.Allow));
+                new DirectoryInfo(parent).SetAccessControl(parentSecurity);
+                if (UpdateStorage.IsSafeApplicationLocation(app, out string unsafeFailure))
+                {
+                    throw new InvalidOperationException(
+                        "An unsafe parent folder was incorrectly accepted.");
+                }
+                Assert(unsafeFailure.Contains("parent folder"));
+
+                Console.WriteLine("PASSED");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"FAILED: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(root))
+                    {
+                        Directory.Delete(root, true);
+                    }
+                }
+                catch
+                {
+                }
             }
         }
 

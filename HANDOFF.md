@@ -1,5 +1,12 @@
 # HANDOFF
 
+## Installation location guard false positive fixed (2026-11-20)
+
+- Root cause of the reported "CryoTray must run from a folder that standard users cannot modify" dialog on a correct install: `UpdateStorage.IsSafeApplicationLocation` walked every ancestor up to the drive root. This machine's `C:\` is owned by a standard user (`S-1-5-21-...-1001`) and grants `BUILTIN\Users` FullControl, while `C:\Program Files` has a protected DACL (`AreAccessRulesProtected=True`, TrustedInstaller owner, Users read/execute). The protected DACL stops the root's ACEs from reaching the app folder, so the install was safe, but the guard rejected it at `C:\`.
+- Fix in `Services/UpdateStorage.cs`: check the application folder's own effective DACL and only its immediate parent. The immediate parent's effective DACL already carries every inherited ACE from higher ancestors, so walking further adds no protection and only produces false failures. Also replaced the swallowed `catch { return false; }` and silent bool-only ACL checks with an `out string failureReason` overload plus `AppendDiagnostic()` logging to the protected update log, so every rejection is diagnosable. `UpdateService.LaunchUpdater` and `SettingsWindow.InstallUpdateAsync` now surface the reason in the update failure detail.
+- Added `TestProtectedAncestorLocation()` to the elevated `/test-updates` suite: builds a user-writable root with a protected child, verifies a protected ancestor no longer rejects the app folder, still rejects a missing folder, and still rejects a dangerous ACE on the immediate parent.
+- Verification: Release build `0 Warning(s), 0 Error(s)`; `/test-unit` 43/43 passed. Reflection harness against real paths: `C:\Program Files\Common Files` now returns `safe=True`, while `C:\Program Files` (whose parent is the unsafe `C:\`) and `C:\` still return `False` with concrete reasons. The elevated `/test-updates` suite could not be run locally because this shell is unelevated; no installer run was possible for the same reason.
+
 ## Working preference
 
 - Do not add unsolicited features. When the user explicitly asks for suggestions, give a short prioritized list first; implement only the items they approve.

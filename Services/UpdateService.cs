@@ -408,10 +408,10 @@ namespace CryoTray.Services
                 throw new FileNotFoundException(LocalizationService.Get("Update_ExeMissing"));
             }
 
-            if (!UpdateStorage.IsSafeApplicationLocation(targetDirectory))
+            if (!UpdateStorage.IsSafeApplicationLocation(targetDirectory, out string locationFailure))
             {
                 throw new InvalidOperationException(
-                    LocalizationService.Get("Update_UnsafeLocation"));
+                    LocalizationService.Get("Update_UnsafeLocation") + " " + locationFailure);
             }
 
             UpdateStorage.EnsureApplicationDirectoryProtected(targetDirectory);

@@ -2277,10 +2277,11 @@ namespace CryoTray.Views
 
             try
             {
-                if (!UpdateStorage.IsSafeApplicationLocation(AppContext.BaseDirectory))
+                if (!UpdateStorage.IsSafeApplicationLocation(
+                        AppContext.BaseDirectory, out string locationFailure))
                 {
                     throw new InvalidOperationException(
-                        LocalizationService.Get("Update_UnsafeLocation"));
+                        LocalizationService.Get("Update_UnsafeLocation") + " " + locationFailure);
                 }
 
                 SetUpdateState("Settings_Downloading", "Settings_DownloadingButton", release.Version);

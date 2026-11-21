@@ -111,47 +111,81 @@ namespace CryoTray.Services
 
         public static bool IsSafeApplicationLocation(string applicationDirectory)
         {
+            return IsSafeApplicationLocation(applicationDirectory, out _);
+        }
+
+        /// <summary>
+        /// Verifies that a standard user can neither change the application folder nor
+        /// replace it through the directory that contains it. The overload with
+        /// <paramref name="failureReason"/> returns the specific cause instead of silently
+        /// collapsing every rejection into the same generic dialog.
+        /// </summary>
+        public static bool IsSafeApplicationLocation(string applicationDirectory, out string failureReason)
+        {
+            failureReason = string.Empty;
             try
             {
                 string fullPath = Path.GetFullPath(applicationDirectory).TrimEnd(
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 if (!Directory.Exists(fullPath))
                 {
+                    failureReason = $"Application folder not found: {fullPath}";
                     return false;
                 }
 
                 EnsureNoReparsePoints(fullPath);
-                if (!IsApplicationDirectorySafe(fullPath))
+                if (!IsApplicationDirectorySafe(fullPath, out failureReason))
                 {
                     return false;
                 }
 
-                string? current = Path.GetDirectoryName(fullPath);
-                while (!string.IsNullOrEmpty(current))
+                // Only the directory that contains the application folder can be used to
+                // delete or rename it. That directory's effective DACL already includes every
+                // inherited ACE from higher ancestors, so walking past it adds no protection.
+                // Walking past it does break valid installs under Program Files: a drive root
+                // can be user-owned while Program Files keeps a protected DACL that stops
+                // those rights from ever reaching the application folder.
+                string? parent = Path.GetDirectoryName(fullPath);
+                if (!string.IsNullOrEmpty(parent) &&
+                    PathExists(parent) &&
+                    (!Directory.Exists(parent) ||
+                     !IsDirectorySafeForElevation(parent, out failureReason)))
                 {
-                    if (PathExists(current))
+                    if (string.IsNullOrEmpty(failureReason))
                     {
-                        if (!Directory.Exists(current) ||
-                            !IsDirectorySafeForElevation(current))
-                        {
-                            return false;
-                        }
+                        failureReason = $"Parent folder is not a directory: {parent}";
                     }
 
-                    string? parent = Path.GetDirectoryName(current);
-                    if (string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
-                    {
-                        break;
-                    }
-
-                    current = parent;
+                    return false;
                 }
 
                 return true;
             }
+            catch (Exception ex)
+            {
+                failureReason = $"Location check failed for '{applicationDirectory}': " +
+                                $"{ex.GetType().Name}: {ex.Message}";
+                AppendDiagnostic(failureReason);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Best-effort diagnostic write to the protected update log. A failure to log must not
+        /// block startup or an update, so this deliberately does not rethrow.
+        /// </summary>
+        public static void AppendDiagnostic(string message)
+        {
+            try
+            {
+                EnsureUpdateRoot();
+                File.AppendAllText(
+                    LogPath,
+                    $"[{DateTime.UtcNow:o}] {message}{Environment.NewLine}");
+            }
             catch
             {
-                return false;
+                // The log is diagnostic only; callers already receive the failure reason.
             }
         }
 
@@ -300,8 +334,9 @@ namespace CryoTray.Services
                    (owner.Equals(AdministratorsSid) || owner.Equals(LocalSystemSid));
         }
 
-        private static bool IsDirectorySafeForElevation(string path)
+        private static bool IsDirectorySafeForElevation(string path, out string failureReason)
         {
+            failureReason = string.Empty;
             var security = new DirectoryInfo(path).GetAccessControl(
                 AccessControlSections.Access | AccessControlSections.Owner);
             var owner = security.GetOwner(typeof(SecurityIdentifier));
@@ -310,6 +345,8 @@ namespace CryoTray.Services
                  !owner.Equals(LocalSystemSid) &&
                  !owner.Equals(TrustedInstallerSid)))
             {
+                failureReason = $"Untrusted owner '{owner}' on parent folder '{path}'.";
+                AppendDiagnostic(failureReason);
                 return false;
             }
 
@@ -327,6 +364,9 @@ namespace CryoTray.Services
 
                 if ((rule.FileSystemRights & DangerousWriteRights) != 0)
                 {
+                    failureReason = $"'{rule.IdentityReference}' can delete or change " +
+                                    $"permissions on parent folder '{path}'.";
+                    AppendDiagnostic(failureReason);
                     return false;
                 }
             }
@@ -334,8 +374,9 @@ namespace CryoTray.Services
             return true;
         }
 
-        private static bool IsApplicationDirectorySafe(string path)
+        private static bool IsApplicationDirectorySafe(string path, out string failureReason)
         {
+            failureReason = string.Empty;
             var security = new DirectoryInfo(path).GetAccessControl(
                 AccessControlSections.Access | AccessControlSections.Owner);
             var owner = security.GetOwner(typeof(SecurityIdentifier));
@@ -344,6 +385,8 @@ namespace CryoTray.Services
                  !owner.Equals(LocalSystemSid) &&
                  !owner.Equals(TrustedInstallerSid)))
             {
+                failureReason = $"Untrusted owner '{owner}' on application folder '{path}'.";
+                AppendDiagnostic(failureReason);
                 return false;
             }
 
@@ -362,6 +405,9 @@ namespace CryoTray.Services
 
                 if ((rule.FileSystemRights & unsafeRights) != 0)
                 {
+                    failureReason = $"'{rule.IdentityReference}' can write to application " +
+                                    $"folder '{path}'.";
+                    AppendDiagnostic(failureReason);
                     return false;
                 }
             }

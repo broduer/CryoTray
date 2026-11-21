@@ -1,5 +1,10 @@
 # CONTEXT
 
+## Installation location guard (2026-11-20)
+
+- `UpdateStorage.IsSafeApplicationLocation` now checks the application folder's effective DACL and only its immediate parent, not every ancestor to the drive root. A parent's effective DACL already contains all inherited ACEs from above, and a protected DACL on that parent (Windows sets one on `C:\Program Files`) blocks higher ancestor ACEs entirely. This removes the false rejection of valid installs on machines whose drive root is user-owned or grants standard users FullControl.
+- Failures are no longer silent: a new `IsSafeApplicationLocation(string, out string failureReason)` overload reports the specific cause, and `AppendDiagnostic()` writes it to the protected `%ProgramData%\CryoTray\Update\update.log`. The updater and Settings install paths append the reason to the failure detail shown in About; the startup dialog keeps the localized message and the detail is logged.
+
 ## PR #1 integration (2026-11-20)
 
 - Merged `origin/pr-1-review` into local `main` through `pr-1-integration`, preserving the GPU details row, GPU chart metric switch, sustained hotspot-to-edge delta alert, and Top processes panel while adding the PR's per-GPU history, hotspot/VRAM alerts, compatibility, security, updater, installer, and test hardening.
